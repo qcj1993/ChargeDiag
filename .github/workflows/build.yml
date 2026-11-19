@@ -1,0 +1,49 @@
+name: Build ChargeDiag tipa
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          brew install xcodegen
+          xcodegen --version
+          xcodebuild -version
+          swift --version
+
+      - name: Build and package
+        run: |
+          chmod +x scripts/package.sh
+          ./scripts/package.sh build/ChargeDiag.tipa
+
+      - name: Show what was built
+        if: always()
+        run: |
+          ls -l build/ 2>/dev/null || true
+
+      - name: Keep the build log when it fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/chargedign/build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload the tipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChargeDiag-tipa
+          path: build/ChargeDiag.tipa
+          if-no-files-found: error
+          retention-days: 30
