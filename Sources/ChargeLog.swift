@@ -256,6 +256,9 @@ final class ChargeLog {
         (try? String(contentsOf: csvURL(id), encoding: .utf8)) ?? ""
     }
 
+    /// Every row of a session, for drawing its curve.
+    func rows(_ id: String) -> [LogRow] { readRows(id) }
+
     func csvURLFor(_ id: String) -> URL { csvURL(id) }
 
     func delete(_ id: String) {

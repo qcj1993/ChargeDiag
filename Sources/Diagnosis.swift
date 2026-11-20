@@ -45,6 +45,9 @@ final class Diagnosis: ObservableObject {
     @Published var logURL: URL?
     @Published var sessions: [SessionSummary] = []
     @Published var showingShares = false
+    /// Points for the curve: the live session, or a past one the person picked.
+    @Published var chart: [LogRow] = []
+    @Published var chartLabel = "本次记录"
 
     private var sensors: PowerSensors?
     private var powerSources: PowerSources?
@@ -74,6 +77,9 @@ final class Diagnosis: ObservableObject {
             verdict = Self.verdict(for: settled)
         }
         sessions = ChargeLog.shared.summaries()
+        if let latest = sessions.first {
+            loadChart(for: latest)
+        }
     }
 
     var inputWatts: Double { inputVolts * inputAmps }
@@ -92,6 +98,8 @@ final class Diagnosis: ObservableObject {
         rows = 0
         peakInput = 0
         peakInputBelow50 = 0
+        chart = []
+        chartLabel = "本次记录"
         startedAt = Date()
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
@@ -205,6 +213,25 @@ final class Diagnosis: ObservableObject {
         if row.percent < 50 {
             peakInputBelow50 = max(peakInputBelow50, row.inputW)
         }
+
+        // Keep the curve bounded without losing its shape: past the cap, drop
+        // every other point. Elapsed time is absolute, so the line stays correct
+        // and only its resolution halves.
+        if chart.count >= 1200 {
+            var thinned: [LogRow] = []
+            thinned.reserveCapacity(chart.count / 2 + 1)
+            for (index, point) in chart.enumerated() where index % 2 == 0 {
+                thinned.append(point)
+            }
+            chart = thinned
+        }
+        chart.append(row)
+    }
+
+    /// Show a finished session's curve.
+    func loadChart(for summary: SessionSummary) {
+        chart = ChargeLog.shared.rows(summary.id)
+        chartLabel = summary.startedAt.formatted(date: .abbreviated, time: .shortened)
     }
 
     // MARK: - Verdicts

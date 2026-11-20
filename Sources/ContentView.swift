@@ -16,6 +16,7 @@ struct ContentView: View {
                     header
                     bigNumber
                     grid
+                    chartCard
                     detailRows
                     actionButton
                     if let verdict = d.verdict {
@@ -115,6 +116,39 @@ struct ContentView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
         .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var chartCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("功率曲线")
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundColor(.white)
+                Spacer()
+                Text(d.chartLabel)
+                    .font(.system(size: 11))
+                    .foregroundColor(dim)
+                    .lineLimit(1)
+            }
+            WattsCurve(rows: d.chart)
+                .frame(height: 148)
+            HStack(spacing: 16) {
+                legendDot(Color(red: 0.35, green: 0.72, blue: 1.0), "充电器输入")
+                legendDot(Color(red: 0.66, green: 0.55, blue: 0.98), "进入电池")
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func legendDot(_ color: Color, _ title: String) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundColor(dim)
+        }
     }
 
     private var detailRows: some View {
@@ -264,6 +298,8 @@ struct ContentView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { d.loadChart(for: summary) }
     }
 
     private func duration(_ seconds: Double) -> String {
@@ -272,5 +308,115 @@ struct ContentView: View {
             return "\(total / 3600) 小时 \((total % 3600) / 60) 分"
         }
         return "\(max(1, total / 60)) 分"
+    }
+}
+
+/// The charge's shape: charger input and what reached the cell, against time.
+///
+/// Drawn by hand rather than with Swift Charts, which needs iOS 16 -- this app
+/// still installs on 15. Two lines is not worth raising the floor for.
+private struct WattsCurve: View {
+    let rows: [LogRow]
+
+    private let inputColor = Color(red: 0.35, green: 0.72, blue: 1.0)
+    private let cellColor = Color(red: 0.66, green: 0.55, blue: 0.98)
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            if rows.count < 2 || w < 10 || h < 10 {
+                Text("记录开始后，这里会画出功率随时间的变化。")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(red: 0.45, green: 0.48, blue: 0.54))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                let pts = Self.thin(rows, to: 260)
+                let t0 = pts[0].elapsed
+                let t1 = max(pts[pts.count - 1].elapsed, t0 + 1)
+                let peak = max(pts.map { $0.inputW }.max() ?? 0, 5)
+                let top = max(5, (peak / 5).rounded(.up) * 5)
+
+                ZStack(alignment: .topLeading) {
+                    grid(top: top, w: w, h: h)
+
+                    area(pts, t0: t0, t1: t1, top: top, w: w, h: h)
+                        .fill(LinearGradient(colors: [inputColor.opacity(0.28), inputColor.opacity(0.02)],
+                                             startPoint: .top, endPoint: .bottom))
+
+                    line(pts, value: { $0.cellW }, t0: t0, t1: t1, top: top, w: w, h: h)
+                        .stroke(cellColor.opacity(0.85), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+
+                    line(pts, value: { $0.inputW }, t0: t0, t1: t1, top: top, w: w, h: h)
+                        .stroke(LinearGradient(colors: [inputColor, inputColor.opacity(0.65)],
+                                               startPoint: .leading, endPoint: .trailing),
+                                style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(String(format: "%.0f W", top))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Color(red: 0.45, green: 0.48, blue: 0.54))
+                        Spacer()
+                        Text("0")
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundColor(Color(red: 0.45, green: 0.48, blue: 0.54))
+                    }
+                }
+            }
+        }
+    }
+
+    private func grid(top: Double, w: CGFloat, h: CGFloat) -> some View {
+        Path { p in
+            for step in 0...4 {
+                let y = h * CGFloat(step) / 4
+                p.move(to: CGPoint(x: 0, y: y))
+                p.addLine(to: CGPoint(x: w, y: y))
+            }
+        }
+        .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
+    }
+
+    private func line(_ pts: [LogRow],
+                      value: (LogRow) -> Double,
+                      t0: Double, t1: Double, top: Double,
+                      w: CGFloat, h: CGFloat) -> Path {
+        var p = Path()
+        for (index, row) in pts.enumerated() {
+            let x = CGFloat((row.elapsed - t0) / (t1 - t0)) * w
+            let y = h - CGFloat(min(max(value(row), 0), top) / top) * h
+            if index == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        return p
+    }
+
+    private func area(_ pts: [LogRow],
+                      t0: Double, t1: Double, top: Double,
+                      w: CGFloat, h: CGFloat) -> Path {
+        var p = Path()
+        for (index, row) in pts.enumerated() {
+            let x = CGFloat((row.elapsed - t0) / (t1 - t0)) * w
+            let y = h - CGFloat(min(max(row.inputW, 0), top) / top) * h
+            if index == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        p.addLine(to: CGPoint(x: w, y: h))
+        p.addLine(to: CGPoint(x: 0, y: h))
+        p.closeSubpath()
+        return p
+    }
+
+    private static func thin(_ rows: [LogRow], to limit: Int) -> [LogRow] {
+        guard rows.count > limit else { return rows }
+        let step = Double(rows.count) / Double(limit)
+        var out: [LogRow] = []
+        out.reserveCapacity(limit + 1)
+        var i = 0.0
+        while Int(i) < rows.count {
+            out.append(rows[Int(i)])
+            i += step
+        }
+        if let last = rows.last, out.last?.at != last.at { out.append(last) }
+        return out
     }
 }
