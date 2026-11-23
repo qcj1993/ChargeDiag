@@ -28,6 +28,10 @@ struct ContentView: View {
                     if let error = d.sensorError {
                         noteCard(error, tint: Color(red: 0.95, green: 0.34, blue: 0.30))
                     }
+                    if d.running {
+                        noteCard("息屏后系统会冻结这个 App，只能在偶尔唤醒时补采。为了保证数据连续，充满前尽量让它停在屏幕上。",
+                                 tint: Color(red: 0.35, green: 0.72, blue: 1.0))
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 20)
@@ -75,7 +79,7 @@ struct ContentView: View {
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundColor(dim)
             }
-            Text("充电器输入 · 当前")
+            Text(d.charging ? "充电器输入 · 当前" : "充电器输入 · 未在充电")
                 .font(.system(size: 13))
                 .foregroundColor(dim)
         }
@@ -136,6 +140,9 @@ struct ContentView: View {
                 legendDot(Color(red: 0.35, green: 0.72, blue: 1.0), "充电器输入")
                 legendDot(Color(red: 0.66, green: 0.55, blue: 0.98), "进入电池")
                 Spacer()
+                Text("断口 = 息屏未采到")
+                    .font(.system(size: 10))
+                    .foregroundColor(Color(red: 0.42, green: 0.45, blue: 0.52))
             }
         }
         .padding(14)
@@ -156,6 +163,8 @@ struct ContentView: View {
             row("USB-C 输入", String(format: "%.2f V × %.2f A", d.inputVolts, d.inputAmps))
             divider
             row("进入电池", String(format: "%.1f W", d.cellWatts))
+            divider
+            row("充电状态", d.charging ? "充电中" : "未充电")
             divider
             row("已记录", "\(d.rows) 条 · \(timeText)")
             divider
@@ -278,28 +287,56 @@ struct ContentView: View {
     }
 
     private func sessionCard(_ summary: SessionSummary) -> some View {
-        let peak = summary.sawBelow50 ? summary.peakInputWBelow50 : summary.peakInputW
-        let tint: Color = peak >= 18 ? Color(red: 0.20, green: 0.78, blue: 0.45)
-            : (peak >= 12 ? Color(red: 0.98, green: 0.68, blue: 0.19) : Color(red: 0.95, green: 0.34, blue: 0.30))
+        // Judge on the rate the level rose at, falling back to the peak for
+        // summaries written before the charging column existed.
+        let judged = summary.levelWatts ?? (summary.sawBelow50 ? summary.peakInputWBelow50 : summary.peakInputW)
+        let tint: Color = judged >= 12 ? Color(red: 0.20, green: 0.78, blue: 0.45)
+            : (judged >= 6 ? Color(red: 0.98, green: 0.68, blue: 0.19) : Color(red: 0.95, green: 0.34, blue: 0.30))
+
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(summary.startedAt.formatted(date: .abbreviated, time: .shortened))
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundColor(.white)
                 Spacer()
-                Text(String(format: "峰值 %.1f W", peak))
+                Text(String(format: "%.1f W", judged))
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundColor(tint)
             }
-            Text("\(summary.firstPercent)% → \(summary.lastPercent)% · \(summary.rows) 条 · " + duration(summary.seconds))
+            Text("\(summary.firstPercent)% → \(summary.lastPercent)% · 跨度 \(duration(summary.seconds)) · \(summary.rows) 条")
                 .font(.system(size: 11))
                 .foregroundColor(dim)
+
+            if let charged = summary.chargingSeconds, charged > 0 {
+                HStack(spacing: 10) {
+                    chip("充电 \(duration(charged))")
+                    if let perHour = summary.percentPerHour {
+                        chip(String(format: "%.0f%%/h", perHour))
+                    }
+                    if let gaps = summary.gaps, gaps > 0 {
+                        chip("断口 \(gaps)")
+                    }
+                    if let fullAt = summary.fullAt {
+                        chip("满于 " + fullAt.formatted(date: .omitted, time: .shortened))
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { d.loadChart(for: summary) }
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundColor(Color(red: 0.62, green: 0.66, blue: 0.74))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Color.white.opacity(0.06), in: Capsule())
     }
 
     private func duration(_ seconds: Double) -> String {
@@ -315,11 +352,18 @@ struct ContentView: View {
 ///
 /// Drawn by hand rather than with Swift Charts, which needs iOS 16 -- this app
 /// still installs on 15. Two lines is not worth raising the floor for.
+///
+/// Intervals the app was frozen for are left as breaks in the line. Joining them
+/// would draw a smooth curve through data that does not exist, which is exactly
+/// how a night that finished at one in the morning comes to look like it took
+/// six hours.
 private struct WattsCurve: View {
     let rows: [LogRow]
 
     private let inputColor = Color(red: 0.35, green: 0.72, blue: 1.0)
     private let cellColor = Color(red: 0.66, green: 0.55, blue: 0.98)
+    /// Anything longer than this is a suspension, not a sampling interval.
+    private static let gapThreshold: TimeInterval = 120
 
     var body: some View {
         GeometryReader { geo in
@@ -345,10 +389,10 @@ private struct WattsCurve: View {
                         .fill(LinearGradient(colors: [inputColor.opacity(0.28), inputColor.opacity(0.02)],
                                              startPoint: .top, endPoint: .bottom))
 
-                    line(pts, value: { $0.cellW }, t0: t0, t1: t1, top: top, w: w, h: h)
+                    segment(pts, value: { $0.cellW }, t0: t0, t1: t1, top: top, w: w, h: h)
                         .stroke(cellColor.opacity(0.85), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
 
-                    line(pts, value: { $0.inputW }, t0: t0, t1: t1, top: top, w: w, h: h)
+                    segment(pts, value: { $0.inputW }, t0: t0, t1: t1, top: top, w: w, h: h)
                         .stroke(LinearGradient(colors: [inputColor, inputColor.opacity(0.65)],
                                                startPoint: .leading, endPoint: .trailing),
                                 style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
@@ -378,15 +422,24 @@ private struct WattsCurve: View {
         .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
     }
 
-    private func line(_ pts: [LogRow],
-                      value: (LogRow) -> Double,
-                      t0: Double, t1: Double, top: Double,
-                      w: CGFloat, h: CGFloat) -> Path {
+    /// A path that starts a new subpath wherever the sampling stopped, so a
+    /// suspension shows as a break instead of a straight line across it.
+    private func segment(_ pts: [LogRow],
+                         value: (LogRow) -> Double,
+                         t0: Double, t1: Double, top: Double,
+                         w: CGFloat, h: CGFloat) -> Path {
         var p = Path()
-        for (index, row) in pts.enumerated() {
+        var previous: LogRow?
+        for row in pts {
             let x = CGFloat((row.elapsed - t0) / (t1 - t0)) * w
             let y = h - CGFloat(min(max(value(row), 0), top) / top) * h
-            if index == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+            let broken = previous.map { row.elapsed - $0.elapsed > Self.gapThreshold } ?? true
+            if broken {
+                p.move(to: CGPoint(x: x, y: y))
+            } else {
+                p.addLine(to: CGPoint(x: x, y: y))
+            }
+            previous = row
         }
         return p
     }
@@ -395,14 +448,34 @@ private struct WattsCurve: View {
                       t0: Double, t1: Double, top: Double,
                       w: CGFloat, h: CGFloat) -> Path {
         var p = Path()
-        for (index, row) in pts.enumerated() {
+        var runStart: CGFloat?
+
+        func closeRun(_ endX: CGFloat) {
+            guard let startX = runStart else { return }
+            p.addLine(to: CGPoint(x: endX, y: h))
+            p.addLine(to: CGPoint(x: startX, y: h))
+            p.closeSubpath()
+            runStart = nil
+        }
+
+        var previous: LogRow?
+        for row in pts {
             let x = CGFloat((row.elapsed - t0) / (t1 - t0)) * w
             let y = h - CGFloat(min(max(row.inputW, 0), top) / top) * h
-            if index == 0 { p.move(to: CGPoint(x: x, y: y)) } else { p.addLine(to: CGPoint(x: x, y: y)) }
+            let broken = previous.map { row.elapsed - $0.elapsed > Self.gapThreshold } ?? false
+
+            if broken {
+                closeRun(CGFloat((previous!.elapsed - t0) / (t1 - t0)) * w)
+            }
+            if runStart == nil {
+                runStart = x
+                p.move(to: CGPoint(x: x, y: y))
+            } else {
+                p.addLine(to: CGPoint(x: x, y: y))
+            }
+            previous = row
         }
-        p.addLine(to: CGPoint(x: w, y: h))
-        p.addLine(to: CGPoint(x: 0, y: h))
-        p.closeSubpath()
+        closeRun(w)
         return p
     }
 

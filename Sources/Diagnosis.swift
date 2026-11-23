@@ -48,6 +48,8 @@ final class Diagnosis: ObservableObject {
     /// Points for the curve: the live session, or a past one the person picked.
     @Published var chart: [LogRow] = []
     @Published var chartLabel = "本次记录"
+    /// Set when the log was picked up from a previous run rather than started now.
+    @Published var resumedFrom: Date?
 
     private var sensors: PowerSensors?
     private var powerSources: PowerSources?
@@ -73,7 +75,7 @@ final class Diagnosis: ObservableObject {
         }
         // A run that never got to stop: charge overnight, app suspended, phone
         // now on the lock screen. Settle it before showing anything.
-        if let settled = ChargeLog.shared.settleOrphanedSession() {
+        if let settled = ChargeLog.shared.settleOrphanedSession(packWh: packWh) {
             verdict = Self.verdict(for: settled)
         }
         sessions = ChargeLog.shared.summaries()
@@ -100,9 +102,11 @@ final class Diagnosis: ObservableObject {
         peakInputBelow50 = 0
         chart = []
         chartLabel = "本次记录"
+        resumedFrom = nil
         startedAt = Date()
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
+        BackgroundSampler.shared.schedule()
         tick()
 
         timer?.invalidate()
@@ -116,10 +120,12 @@ final class Diagnosis: ObservableObject {
         running = false
         timer?.invalidate()
         timer = nil
-        ChargeLog.shared.close()
+        ChargeLog.shared.close(packWh: packWh)
+        BackgroundSampler.shared.cancel()
         sessions = ChargeLog.shared.summaries()
         if let latest = sessions.first {
             verdict = Self.verdict(for: latest)
+            loadChart(for: latest)
         }
     }
 
@@ -128,6 +134,7 @@ final class Diagnosis: ObservableObject {
     /// or the next launch if iOS reclaims the memory. Closing here would end the
     /// night's record a few seconds after it started.
     func sceneWillResignActive() {
+        BackgroundSampler.shared.schedule()
         guard running else { return }
         sample()
         ChargeLog.shared.flush()
@@ -149,8 +156,17 @@ final class Diagnosis: ObservableObject {
         }
     }
 
+    /// Called by the background refresh task. Appends one row to the open session
+    /// so the night is punctuated rather than blank.
+    func backgroundTick() {
+        guard running, ChargeLog.shared.isRecording else { return }
+        sample()
+        ChargeLog.shared.flush()
+    }
+
     func refreshSessions() {
         sessions = ChargeLog.shared.summaries()
+        loadChart(for: sessions.first)
     }
 
     // MARK: - Sampling
@@ -162,6 +178,14 @@ final class Diagnosis: ObservableObject {
     }
 
     private func sample() {
+        // A wake-up can arrive before `start()` has run, when the phone was
+        // plugged in with the app closed. Reopen the session it left behind.
+        if startedAt == nil, running == false, ChargeLog.shared.hasOpenSession {
+            guard ChargeLog.shared.reopen(packWh: packWh) else { return }
+            running = true
+            startedAt = ChargeLog.shared.openSessionStartedAt
+            resumedFrom = startedAt
+        }
         guard let startedAt else { return }
 
         let readings = sensors?.read() ?? []
@@ -198,14 +222,17 @@ final class Diagnosis: ObservableObject {
             charging = snapshot.charging
         }
 
-        let row = LogRow(elapsed: Date().timeIntervalSince(startedAt),
+        let elapsedNow = Date().timeIntervalSince(startedAt)
+        elapsed = max(elapsed, elapsedNow)
+        let row = LogRow(elapsed: elapsedNow,
                          at: Date(),
                          percent: percent,
                          inputV: inputVolts,
                          inputA: inputAmps,
                          cellV: cellVolts,
                          cellA: cellAmps,
-                         temp: temp)
+                         temp: temp,
+                         charging: charging)
         ChargeLog.shared.append(row)
 
         rows += 1
@@ -229,7 +256,8 @@ final class Diagnosis: ObservableObject {
     }
 
     /// Show a finished session's curve.
-    func loadChart(for summary: SessionSummary) {
+    func loadChart(for summary: SessionSummary?) {
+        guard let summary else { return }
         chart = ChargeLog.shared.rows(summary.id)
         chartLabel = summary.startedAt.formatted(date: .abbreviated, time: .shortened)
     }
@@ -237,9 +265,23 @@ final class Diagnosis: ObservableObject {
     // MARK: - Verdicts
 
     private static func verdict(for summary: SessionSummary) -> Verdict {
-        let peak = summary.sawBelow50 ? summary.peakInputWBelow50 : summary.peakInputW
         let span = summary.startedAt.formatted(date: .abbreviated, time: .shortened)
-        let window = summary.sawBelow50 ? "50% 以下" : "整个充电过程"
+        let peak = summary.sawBelow50 ? summary.peakInputWBelow50 : summary.peakInputW
+
+        // A charge that finished early and then sat full is not slow. Say so
+        // before any rate is judged, or a perfectly healthy overnight charge
+        // reads as a failure.
+        if let fullAt = summary.fullAt,
+           let chargingSeconds = summary.chargingSeconds,
+           chargingSeconds > 0 {
+            let idleMinutes = summary.endedAt.timeIntervalSince(fullAt) / 60
+            if idleMinutes > 20, summary.lastPercent >= 100 {
+                return Verdict(
+                    level: .good,
+                    headline: "早就在 " + fullAt.formatted(date: .omitted, time: .shortened) + " 充满了",
+                    detail: "\(span) 到现在跨度 \(duration(summary.seconds))，但只有前 \(duration(chargingSeconds)) 在充电，之后一直满电待机。峰值 \(String(format: "%.1f", peak)) W，实际充电速率 \(rateText(summary))。这台机器充电正常。")
+            }
+        }
 
         guard peak > 0.1 else {
             return Verdict(level: .unknown,
@@ -247,19 +289,52 @@ final class Diagnosis: ObservableObject {
                            detail: "\(span) 这次记录里没有充电功率读数，日志已保留，可导出查看。")
         }
 
+        // The rate the level rose at is the figure that answers "was this slow".
+        // It is immune to the app being frozen, because it comes from two levels
+        // the system reported either side of the night.
+        if let rate = summary.levelWatts {
+            if rate >= 12 {
+                return Verdict(level: .good,
+                               headline: "充电正常：\(String(format: "%.1f", rate)) W",
+                               detail: "\(span) 起，按电量上升速率换算是 \(String(format: "%.1f", rate)) W（\(rateText(summary))），峰值 \(String(format: "%.1f", peak)) W。链路没有限制。")
+            }
+            if rate >= 6 {
+                return Verdict(level: .warn,
+                               headline: "偏慢：\(String(format: "%.1f", rate)) W",
+                               detail: "\(span) 起，按电量上升速率换算只有 \(String(format: "%.1f", rate)) W（\(rateText(summary))），峰值 \(String(format: "%.1f", peak)) W。前端能协商，但大部分时间没吃满。")
+            }
+            return Verdict(level: .bad,
+                           headline: "明显限流：\(String(format: "%.1f", rate)) W",
+                           detail: "\(span) 起，按电量上升速率换算只有 \(String(format: "%.1f", rate)) W（\(rateText(summary))），虽然峰值到过 \(String(format: "%.1f", peak)) W。功率只在开头短暂出现，随后被压住。")
+        }
+
+        // No usable rate: fall back to the peak, and say that is what it is.
         if peak >= 18 {
             return Verdict(level: .good,
                            headline: "快充正常：峰值 \(String(format: "%.1f", peak)) W",
-                           detail: "\(span) 起，\(window)最高取到 \(String(format: "%.1f", peak)) W。这个功率对 iPhone 15 Pro 是正常的快充水平，充电链路没有限制。")
+                           detail: "\(span) 起，\(summary.sawBelow50 ? "50% 以下" : "过程中")最高 \(String(format: "%.1f", peak)) W。这次没采到足够的连续数据来算平均速率，建议再记录一次并保持 App 打开几分钟。")
         }
         if peak >= 12 {
             return Verdict(level: .warn,
                            headline: "偏慢：峰值 \(String(format: "%.1f", peak)) W",
-                           detail: "\(span) 起，\(window)最高 \(String(format: "%.1f", peak)) W，低于该电量应有的 18–27 W，但不至于停摆。可能来自温度、线材或充电策略。")
+                           detail: "\(span) 起，最高只有 \(String(format: "%.1f", peak)) W，低于该电量应有的 18–27 W。")
         }
         return Verdict(level: .bad,
                        headline: "明显限流：峰值 \(String(format: "%.1f", peak)) W",
-                       detail: "\(span) 起，\(window)最高只有 \(String(format: "%.1f", peak)) W。前端握手正常却取不上功率，问题在手机内部到电池这一段。")
+                       detail: "\(span) 起，最高只有 \(String(format: "%.1f", peak)) W。前端握手正常却取不上功率，问题在手机内部到电池这一段。")
+    }
+
+    private static func rateText(_ summary: SessionSummary) -> String {
+        guard let perHour = summary.percentPerHour else { return "速率未知" }
+        return String(format: "每小时 %.0f%%", perHour)
+    }
+
+    private static func duration(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        if total >= 3600 {
+            return "\(total / 3600) 小时 \((total % 3600) / 60) 分"
+        }
+        return "\(max(1, total / 60)) 分"
     }
 
     /// Whether the reported cell voltage is consistent with the reported level.
@@ -274,8 +349,7 @@ final class Diagnosis: ObservableObject {
 
     func shareItems() -> [Any] {
         var items: [Any] = []
-        let top = sessions.prefix(3)
-        for summary in top {
+        for summary in sessions.prefix(3) {
             let url = ChargeLog.shared.csvURLFor(summary.id)
             if FileManager.default.fileExists(atPath: url.path) {
                 items.append(url)
