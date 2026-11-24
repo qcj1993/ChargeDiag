@@ -20,7 +20,8 @@ targets:
     info:
       path: Support/Info.plist
       properties:
-        CFBundleDisplayName: 闁稿繐鎳愰弫鍝ユ嫚婵犲啯鐒?        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleDisplayName: 充电诊断
+        CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundlePackageType: APPL
         CFBundleShortVersionString: "1.5"
