@@ -32,6 +32,12 @@ struct ContentView: View {
                     if d.running {
                         noteCard(keepingNote, tint: keepingTint)
                     }
+                    if let sceneNote = sceneNote {
+                        noteCard(sceneNote, tint: Color(red: 0.95, green: 0.34, blue: 0.30))
+                    }
+                    if !d.probes.isEmpty {
+                        probeSection
+                    }
                     sessionsSection
                 }
                 .padding(.horizontal, 20)
@@ -47,6 +53,14 @@ struct ContentView: View {
             case .inactive, .background: d.sceneWillResignActive()
             case .active: d.sceneDidBecomeActive()
             @unknown default: break
+            }
+        }
+        .onAppear {
+            d.refreshDiagnostics()
+            // The hook retries for a few seconds after launch, so look again once
+            // it has settled rather than reporting the first attempt's answer.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 12) {
+                d.refreshDiagnostics()
             }
         }
     }
@@ -131,6 +145,11 @@ struct ContentView: View {
         return d.running ? "已安装，尚未触发" : "已安装"
     }
 
+    private var sceneNote: String? {
+        guard !d.sceneHookInstalled, let reason = d.sceneHookReason else { return nil }
+        return "挂起拦截：\(reason)"
+    }
+
     private var audioText: String {
         guard d.useAudio else { return "关" }
         return d.backgroundAudio ? "运行中" : "已开启，未启动"
@@ -209,6 +228,54 @@ struct ContentView: View {
             row("容量假设", d.packWhText)
         }
         .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    /// Read-only lookups, so a screenshot answers "why did the hook not install"
+    /// without a debugging session.
+    private var probeSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("通道探测")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(.white)
+                Spacer()
+                Text(failedProbeCount == 0 ? "全部通过" : "\(failedProbeCount) 项不可用")
+                    .font(.system(size: 11))
+                    .foregroundColor(failedProbeCount == 0
+                                     ? Color(red: 0.20, green: 0.78, blue: 0.45)
+                                     : Color(red: 0.98, green: 0.68, blue: 0.19))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            ForEach(Array(d.probes.enumerated()), id: \.offset) { index, probe in
+                if index > 0 { divider }
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: probe.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundColor(probe.ok
+                                        ? Color(red: 0.20, green: 0.78, blue: 0.45)
+                                        : Color(red: 0.55, green: 0.57, blue: 0.62))
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(probe.title)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(red: 0.78, green: 0.80, blue: 0.84))
+                        Text(probe.value)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(probe.ok ? .white : dim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+        }
+        .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var failedProbeCount: Int {
+        d.probes.filter { !$0.ok }.count
     }
 
     private var divider: some View {

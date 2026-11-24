@@ -153,6 +153,7 @@ final class Diagnosis: ObservableObject {
     func sceneDidBecomeActive() {
         BackgroundKeeper.shared.verify()
         backgroundAudio = BackgroundKeeper.shared.audioRunning
+        refreshDiagnostics()
         guard running else {
             refreshSessions()
             return
@@ -173,6 +174,14 @@ final class Diagnosis: ObservableObject {
         ChargeLog.shared.flush()
     }
 
+    /// Re-reads which keep-alive channels are live. The hook retries for several
+    /// seconds after launch, so this is called again once things have settled.
+    func refreshDiagnostics() {
+        sceneHookInstalled = SceneKeeper.shared.installed
+        sceneHookReason = SceneKeeper.shared.failureReason
+        probes = Diagnostics.run()
+    }
+
     /// Whether the silent audio session is currently holding the process open.
     /// Shown in the UI, because "the app is recording" and "the app will still be
     /// recording in an hour" are different promises.
@@ -183,6 +192,10 @@ final class Diagnosis: ObservableObject {
     /// only that the method was found, not that the system ever asked to suspend us.
     @Published var sceneHookInstalled = false
     @Published var blockedTransitions = 0
+    /// Why the hook did not install, phrased for the UI. Nil when it worked.
+    @Published var sceneHookReason: String?
+    /// Read-only findings about which keep-alive channels this device offers.
+    @Published var probes: [Probe] = []
 
     var keepScreenOn: Bool {
         get { BackgroundKeeper.shared.keepScreenOn }
@@ -215,6 +228,10 @@ final class Diagnosis: ObservableObject {
         guard running, let startedAt else { return }
         elapsed = Date().timeIntervalSince(startedAt)
         blockedTransitions = SceneKeeper.shared.blocked
+        if sceneHookInstalled != SceneKeeper.shared.installed {
+            sceneHookInstalled = SceneKeeper.shared.installed
+            sceneHookReason = SceneKeeper.shared.failureReason
+        }
         sample()
     }
 

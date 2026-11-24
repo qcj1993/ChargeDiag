@@ -34,82 +34,112 @@ private let sceneKeeperHits = SceneKeeperCounter()
 /// clears the flag means the system never learns of the transition, so it never
 /// suspends the process, so the sampling timer keeps firing with the screen off.
 ///
-/// This is the trick Immortalizer uses, aimed at our own process instead of someone
-/// else's. That difference matters: the class is already in our address space, so
-/// nothing has to be injected and no private entitlement is needed.
-///
-/// It is also the riskiest thing in this app, so it is built to fail safely:
+/// It is the riskiest thing in this app, so it is built to fail safely and to say
+/// why it failed:
 ///
 /// The replacement is a `@convention(c)` function rather than a block. A block
-/// passed to `imp_implementationWithBlock` has to survive being called from a
+/// handed to `imp_implementationWithBlock` has to survive being called from a
 /// thread Swift knows nothing about, and when that goes wrong the failure is a
-/// crash on launch rather than a hook that does nothing.
+/// crash on launch rather than a hook that quietly does nothing.
 ///
-/// The method's type encoding is checked before it is replaced. A signature that
-/// does not return void with four object arguments is not the method this expects,
-/// and hooking it anyway would pass the wrong arguments.
+/// The method's type encoding is checked before it is replaced, because a signature
+/// that does not return void with four object arguments would pass the wrong
+/// arguments and corrupt the call.
 ///
-/// And a launch that dies with the hook installed is remembered. The first launch
-/// marks the hook pending, the mark is cleared a few seconds later once the app has
-/// survived, and a launch that finds the mark still set knows the hook was what
-/// killed it -- so it never installs it again.
+/// A launch that dies with the hook installed is remembered, so a crash can happen
+/// at most once rather than on every start.
+///
+/// And a failed lookup is retried for a few seconds. FrontBoard is not necessarily
+/// loaded by the time the app finishes launching, so the first attempt can miss a
+/// class that is there a moment later.
 final class SceneKeeper {
     static let shared = SceneKeeper()
 
     private let pendingKey = "sceneHookPending"
     private let failedKey = "sceneHookFailed"
+    private let maxAttempts = 5
 
     private(set) var installed = false
+    /// Why installation failed, phrased for the UI. Nil once it succeeds.
+    private(set) var failureReason: String?
+
+    private var attempts = 0
 
     var blocked: Int { sceneKeeperHits.current }
 
     private init() {}
 
-    /// Hooks the scene update path, unless an earlier launch proved that fatal.
     func install() {
         guard !installed else { return }
         let defaults = UserDefaults.standard
 
         if defaults.bool(forKey: failedKey) {
-            NSLog("[ChargeDiag] scene hook disabled: an earlier launch crashed with it")
+            failureReason = "上次启动崩溃，已永久禁用"
             return
         }
         if defaults.bool(forKey: pendingKey) {
-            // Last launch set the mark and never got to clear it.
+            // The previous launch set the mark and never reached the point of
+            // clearing it, which only happens if it died with the hook installed.
             defaults.set(true, forKey: failedKey)
             defaults.removeObject(forKey: pendingKey)
-            NSLog("[ChargeDiag] previous launch died with the scene hook; disabling it")
+            failureReason = "上次启动崩溃，已永久禁用"
             return
         }
 
-        guard hook() else { return }
-        installed = true
+        attempt()
+    }
 
-        defaults.set(true, forKey: pendingKey)
-        defaults.synchronize()
+    private func attempt() {
+        attempts += 1
 
-        // Survived long enough to trust it. Anything that crashes before this fires
-        // leaves the mark in place and the hook gets dropped next launch.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
-            UserDefaults.standard.removeObject(forKey: self.pendingKey)
+        guard let reason = hook() else {
+            installed = true
+            failureReason = nil
+            let defaults = UserDefaults.standard
+            defaults.set(true, forKey: pendingKey)
+            defaults.synchronize()
+            // Survived long enough to trust it. A crash before this fires leaves the
+            // mark behind and the hook is dropped on the next launch.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                UserDefaults.standard.removeObject(forKey: self.pendingKey)
+            }
+            return
+        }
+
+        if attempts < maxAttempts {
+            // Reported as-is until the last attempt, so a transient miss during
+            // launch does not look like a permanent failure.
+            failureReason = "\(reason)（第 \(attempts) 次尝试）"
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(attempts) * 2) {
+                guard !self.installed else { return }
+                self.attempt()
+            }
+        } else {
+            failureReason = "\(reason)（重试 \(attempts) 次均失败）"
         }
     }
 
-    private func hook() -> Bool {
-        guard let cls = NSClassFromString("FBSWorkspaceScenesClient") else { return false }
+    /// Returns the reason it could not hook, or nil on success.
+    private func hook() -> String? {
+        guard let cls = NSClassFromString("FBSWorkspaceScenesClient") else {
+            return "类不存在"
+        }
         let selector = NSSelectorFromString(
             "sceneID:updateWithSettingsDiff:transitionContext:completion:"
         )
-        guard let method = class_getInstanceMethod(cls, selector) else { return false }
+        guard let method = class_getInstanceMethod(cls, selector) else {
+            return "方法不存在"
+        }
+        guard let typeEncoding = method_getTypeEncoding(method) else {
+            return "无类型编码"
+        }
 
         // v32@0:8@16@24@32@40 -- void return, self, _cmd, then four objects. Anything
         // else means the method changed shape and the arguments below would be wrong.
-        guard let typeEncoding = method_getTypeEncoding(method) else { return false }
         let encoding = String(cString: typeEncoding)
         let objects = encoding.filter { $0 == "@" }.count
         guard encoding.hasPrefix("v"), objects >= 5 else {
-            NSLog("[ChargeDiag] unexpected scene method encoding: \(encoding)")
-            return false
+            return "签名不符 \(encoding)"
         }
 
         sceneKeeperOriginal = method_getImplementation(method)
@@ -118,7 +148,7 @@ final class SceneKeeper {
         ) -> Void
         let replacement = unsafeBitCast(sceneKeeperReplacement as Replacement, to: IMP.self)
         method_setImplementation(method, replacement)
-        return true
+        return nil
     }
 }
 
