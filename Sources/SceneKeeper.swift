@@ -134,12 +134,18 @@ final class SceneKeeper {
             return "无类型编码"
         }
 
-        // v32@0:8@16@24@32@40 -- void return, self, _cmd, then four objects. Anything
-        // else means the method changed shape and the arguments below would be wrong.
+        // Real encoding on iOS 17: Vv48@0:8@16@24@32@?40 -- void return, self, _cmd,
+        // then three objects and a completion block.
+        //
+        // Only the argument shape is checked. The return type is spelled V by this
+        // runtime (oneway void) where the docs use v, so requiring a lowercase prefix
+        // rejected a method that was exactly what it was looking for. What actually
+        // matters is that there are four object arguments after self and _cmd; a
+        // different count means the arguments below would land in the wrong place.
         let encoding = String(cString: typeEncoding)
         let objects = encoding.filter { $0 == "@" }.count
-        guard encoding.hasPrefix("v"), objects >= 5 else {
-            return "签名不符 \(encoding)"
+        guard objects >= 5 else {
+            return "参数不符 \(encoding)"
         }
 
         sceneKeeperOriginal = method_getImplementation(method)

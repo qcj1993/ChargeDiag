@@ -56,14 +56,17 @@ enum Diagnostics {
             ok: !sceneClasses.isEmpty
         ))
 
-        for path in powerlogCandidates {
-            let readable = FileManager.default.isReadableFile(atPath: path)
-            probes.append(Probe(
-                title: path.replacingOccurrences(of: "/var/", with: ""),
-                value: readable ? "可读" : "不可读",
-                ok: readable
-            ))
+        // Collapsed into one line: all four are refused under TrollStore's sandbox on
+        // iOS 17, so listing each one separately only crowds the panel. If a future
+        // iOS leaves one open, the path that worked is named here.
+        let readablePowerlog = powerlogCandidates.filter {
+            FileManager.default.isReadableFile(atPath: $0)
         }
+        probes.append(Probe(
+            title: "powerlog 电池历史",
+            value: readablePowerlog.first ?? "不可读（沙盒限制）",
+            ok: !readablePowerlog.isEmpty
+        ))
 
         return probes
     }
