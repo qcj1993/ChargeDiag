@@ -20,12 +20,11 @@ targets:
     info:
       path: Support/Info.plist
       properties:
-        CFBundleDisplayName: 閸忓懐鏁哥拠濠冩焽
-        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleDisplayName: 闁稿繐鎳愰弫鍝ユ嫚婵犲啯鐒?        CFBundleExecutable: $(EXECUTABLE_NAME)
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundlePackageType: APPL
-        CFBundleShortVersionString: "1.4"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "1.5"
+        CFBundleVersion: "6"
         UILaunchScreen: {}
         UIDeviceFamily: [1]
         # audio is the one that actually works: a silent playback session keeps
@@ -44,8 +43,8 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.qcj.chargedign
         PRODUCT_NAME: ChargeDiag
-        MARKETING_VERSION: "1.4"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "1.5"
+        CURRENT_PROJECT_VERSION: "6"
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
