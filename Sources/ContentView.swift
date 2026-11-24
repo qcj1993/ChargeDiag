@@ -131,20 +131,28 @@ struct ContentView: View {
         return d.running ? "已安装，尚未触发" : "已安装"
     }
 
+    private var audioText: String {
+        guard d.useAudio else { return "关" }
+        return d.backgroundAudio ? "运行中" : "已开启，未启动"
+    }
+
     private var keepingNote: String {
         if d.blockedTransitions > 0 {
             return "系统已经 \(d.blockedTransitions) 次想把 App 挂起，都被拦下了，锁屏后仍会持续记录。"
         }
+        if d.sceneHookInstalled {
+            return "挂起拦截已装好，但还没拦下过任何一次。锁屏几分钟再回来看这里的数字。"
+        }
         if d.backgroundAudio {
-            return "音频会话已保活，锁屏后仍会每秒记录，整晚的数据是连续的。"
+            return "挂起拦截不可用，现在是音频会话在保活，整晚能连续记录，但会占用音频通道。"
         }
         return "两条保活通道都没生效，锁屏后系统会冻结这个 App，只能在偶尔唤醒时补采。"
     }
 
     private var keepingTint: Color {
-        if d.blockedTransitions > 0 || d.backgroundAudio {
-            return Color(red: 0.20, green: 0.78, blue: 0.45)
-        }
+        if d.blockedTransitions > 0 { return Color(red: 0.20, green: 0.78, blue: 0.45) }
+        if d.sceneHookInstalled { return Color(red: 0.35, green: 0.72, blue: 1.0) }
+        if d.backgroundAudio { return Color(red: 0.98, green: 0.68, blue: 0.19) }
         return Color(red: 0.98, green: 0.68, blue: 0.19)
     }
 
@@ -192,9 +200,9 @@ struct ContentView: View {
             divider
             row("充电状态", d.charging ? "充电中" : "未充电")
             divider
-            row("后台保活", d.backgroundAudio ? "静音音频运行中" : (d.running ? "未生效" : "待启动"))
-            divider
             row("挂起拦截", sceneText)
+            divider
+            row("音频保活", audioText)
             divider
             row("已记录", "\(d.rows) 条 · \(timeText)")
             divider
@@ -244,26 +252,39 @@ struct ContentView: View {
     }
 
     private var keeperCard: some View {
+        VStack(spacing: 0) {
+            keeperRow(
+                "保持屏幕常亮",
+                "长时间亮屏有残影风险，一般用不到",
+                isOn: Binding(get: { d.keepScreenOn }, set: { d.keepScreenOn = $0 })
+            )
+            divider
+            keeperRow(
+                "静音音频保活",
+                "会和正在播放的音乐、视频抢音频通道，只在挂起拦截不可用时才需要",
+                isOn: Binding(get: { d.useAudio }, set: { d.useAudio = $0 })
+            )
+        }
+        .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func keeperRow(_ title: String, _ subtitle: String, isOn: Binding<Bool>) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("保持屏幕常亮")
+                Text(title)
                     .font(.system(size: 14))
                     .foregroundColor(.white)
-                Text("只在后台保活失效时才需要打开，长时间亮屏有残影风险")
+                Text(subtitle)
                     .font(.system(size: 11))
                     .foregroundColor(dim)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Toggle("", isOn: Binding(
-                get: { d.keepScreenOn },
-                set: { d.keepScreenOn = $0 }
-            ))
-            .labelsHidden()
+            Toggle("", isOn: isOn)
+                .labelsHidden()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
-        .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func verdictCard(_ verdict: Verdict) -> some View {

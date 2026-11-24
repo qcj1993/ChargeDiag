@@ -28,9 +28,32 @@ final class BackgroundKeeper {
 
     private init() {}
 
+    /// Whether to run the silent audio stream at all.
+    ///
+    /// Off by default. An audio session claiming `.playback` takes the audio route
+    /// for itself, so with it running the phone cannot play music or a video
+    /// without this app being the thing holding the channel -- and the media keys
+    /// start pointing at a stream nobody can hear. That is a bad trade now that the
+    /// scene hook keeps the process alive anyway: the hook is free and invisible,
+    /// the session is neither.
+    ///
+    /// It stays available because the hook is undocumented and could stop working
+    /// on some iOS build, and because a caller may want a second channel. It is a
+    /// fallback to switch on deliberately, not something to impose.
+    var useAudio: Bool {
+        get { UserDefaults.standard.bool(forKey: "useAudio") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "useAudio")
+            if newValue {
+                startAudio()
+            } else {
+                tearDownAudio()
+            }
+        }
+    }
+
     /// Whether to also disable the idle timer. Off by default: a screen left on
-    /// all night is a burn-in risk on OLED, and the audio channel already covers
-    /// the case this app cares about.
+    /// all night is a burn-in risk on OLED.
     var keepScreenOn: Bool {
         get { UserDefaults.standard.bool(forKey: "keepScreenOn") }
         set {
@@ -40,7 +63,7 @@ final class BackgroundKeeper {
     }
 
     func start() {
-        startAudio()
+        if useAudio { startAudio() }
         applyScreen()
     }
 
@@ -55,6 +78,10 @@ final class BackgroundKeeper {
     /// true, and a dead engine is worse than none: the app looks protected and is
     /// not.
     func verify() {
+        guard useAudio else {
+            applyScreen()
+            return
+        }
         guard audioRunning, engine?.isRunning != true else {
             applyScreen()
             return
@@ -69,11 +96,14 @@ final class BackgroundKeeper {
 
         let session = AVAudioSession.sharedInstance()
         do {
-            // .playback rather than .ambient: ambient is silenced by the ring
-            // switch and is the first thing the system reaps when it wants
-            // resources back. No .mixWithOthers either -- exclusive playback is
-            // the mode the scheduler respects most.
-            try session.setCategory(.playback, mode: .default, options: [])
+            // .playback rather than .ambient: ambient is silenced by the ring switch
+            // and is the first thing the system reaps when it wants resources back.
+            //
+            // .mixWithOthers so that turning this on does not take the audio route
+            // away from whatever else is playing. Exclusive playback is the mode the
+            // scheduler respects most, but an app that silences the user's music to
+            // keep itself awake is not worth the extra reliability.
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
         } catch {
             NSLog("[ChargeDiag] audio session refused: \(error.localizedDescription)")

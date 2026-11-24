@@ -107,8 +107,8 @@ final class Diagnosis: ObservableObject {
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
         BackgroundSampler.shared.schedule()
-        // Hold the process open before the screen can sleep on us. The scene hook
-        // went in at launch; the audio session starts and stops with the recording.
+        // The scene hook went in at launch and is what keeps the process alive. The
+        // audio session only starts if the user asked for it.
         BackgroundKeeper.shared.start()
         backgroundAudio = BackgroundKeeper.shared.audioRunning
         sceneHookInstalled = SceneKeeper.shared.installed
@@ -189,6 +189,17 @@ final class Diagnosis: ObservableObject {
         set {
             objectWillChange.send()
             BackgroundKeeper.shared.keepScreenOn = newValue
+            backgroundAudio = BackgroundKeeper.shared.audioRunning
+        }
+    }
+
+    /// Off by default, because holding an audio session silences whatever else the
+    /// phone is playing. The scene hook covers the suspend case on its own.
+    var useAudio: Bool {
+        get { BackgroundKeeper.shared.useAudio }
+        set {
+            objectWillChange.send()
+            BackgroundKeeper.shared.useAudio = newValue
             backgroundAudio = BackgroundKeeper.shared.audioRunning
         }
     }
