@@ -180,9 +180,28 @@ private func sceneKeeperReplacement(
     unsafeBitCast(original, to: Original.self)(receiver, command, first, second, third, fourth)
 }
 
-/// Matches the spellings FrontBoard has used for a cleared foreground flag.
+/// Diffs that have to be dropped for the app to be left alone.
+///
+/// The first four clear the foreground flag, which is what makes the system decide
+/// to suspend. The rest are the snapshot requests the system issues on its way to
+/// doing so: a scene that fails to supply a snapshot can be treated as gone. Both
+/// groups come from Immortalizer's own hook, which is the implementation known to
+/// work; dropping only the first group left the app in a state where it was still
+/// being frozen.
+private let blockedDiffMarkers = [
+    "foreground = NotSet",
+    "foreground = No",
+    "foreground = BSSettingFlagNo",
+    "foreground = NO",
+    "hostContextIdentifierForSnapshotting = 0",
+    "scenePresenterRenderIdentifierForSnapshotting = 0",
+    "targetOfEventDeferringEnvironments = (empty)",
+    "FBSceneSnapshotAction:",
+]
+
 private func isGoingToBackground(_ description: String) -> Bool {
-    description.contains("foreground = No")
-        || description.contains("foreground = BSSettingFlagNo")
-        || description.contains("foreground = NotSet")
+    for marker in blockedDiffMarkers where description.contains(marker) {
+        return true
+    }
+    return false
 }

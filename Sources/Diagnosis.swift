@@ -277,7 +277,13 @@ final class Diagnosis: ObservableObject {
 
         if let snapshot = powerSources?.read() {
             percent = snapshot.percent
+            // A replaced battery can report `Is Charging` false while current is
+            // flowing into the cell -- this phone did exactly that at 0.8 A, and the
+            // flag being wrong silently emptied the rate figures. External power plus
+            // current into the cell is the evidence that survives a non-genuine cell.
+            let flowing = cellAmps > 0.05
             charging = snapshot.charging
+                || (snapshot.externalPower && flowing && percent < 100)
         }
 
         let elapsedNow = Date().timeIntervalSince(startedAt)

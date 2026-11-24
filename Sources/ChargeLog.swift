@@ -400,9 +400,13 @@ final class ChargeLog {
 
             let tempIndex = v + 6
             let temp = fields.count > tempIndex ? Double(fields[tempIndex]) : nil
-            // Untagged rows have no charging flag; a cell taking current is the
-            // best available evidence that it was.
-            let charging = tagged ? fields[3] == "1" : cellA > 0.05
+            // The flag is not taken at face value. A replaced battery reported it
+            // false while 0.8 A was going into the cell, and because the rate figures
+            // require a run of charging rows, one bad flag emptied them. Voltage on
+            // the input plus current into the cell is evidence a flag cannot spoil,
+            // so it overrides a false rather than only filling in a missing one.
+            let wired = inputV > 4.5 && cellA > 0.05 && percent < 100
+            let charging = wired || (tagged && fields[3] == "1")
 
             out.append(LogRow(elapsed: elapsed, at: at, percent: percent,
                               inputV: inputV, inputA: inputA,

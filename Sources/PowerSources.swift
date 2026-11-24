@@ -1,17 +1,28 @@
 import Foundation
 
-/// Battery level and charging flag from powerd, via IOKit.
+/// Battery level and charging state from powerd, via IOKit.
 ///
-/// Unlike the vendor rails, this path survives the sandbox on a real iPhone:
-/// it is what every battery widget uses. The percentage is reported by the gas
-/// gauge, so it is trustworthy even when other battery-derived values are not.
+/// Unlike the vendor rails, this path survives the sandbox on a real iPhone: it is
+/// what every battery widget uses. The percentage is reported by the gas gauge, so
+/// it is trustworthy even when other battery-derived values are not.
+///
+/// `Is Charging` is not trustworthy on a phone with a replaced battery -- a third
+/// party cell reported it false while taking 0.8 A, which made every derived figure
+/// vanish. External power is the durable signal; the current into the cell is what
+/// distinguishes charging from merely plugged in.
 final class PowerSources {
     struct Snapshot {
         let percent: Int
         let charging: Bool
         let full: Bool
+        /// True when the phone has a cable attached, whether or not the battery is
+        /// accepting anything.
+        let externalPower: Bool
         /// Nominal pack energy in watt-hours, from the OS when it reports it.
         let maxCapacity: Int?
+        /// The raw description, kept so the probe panel can show what this device
+        /// actually reports instead of what the documentation says it should.
+        let raw: [String: Any]
     }
 
     private typealias CopyInfoFn = @convention(c) () -> Unmanaged<CFTypeRef>?
@@ -49,8 +60,10 @@ final class PowerSources {
             }
             let current = description["Current Capacity"] as? Int
             let max = description["Max Capacity"] as? Int
-            let charging = description["Is Charging"] as? Bool ?? false
+            let chargingFlag = description["Is Charging"] as? Bool ?? false
+            let external = description["ExternalConnected"] as? Bool ?? false
             let state = description["State"] as? String
+            let powerState = description["Power Source State"] as? String
 
             var percent = 0
             if let current, let max, max > 0 {
@@ -59,10 +72,19 @@ final class PowerSources {
                 percent = capacity
             }
 
+            // Three sources of the same fact, because any one of them can be wrong
+            // on a non-genuine battery.
+            let attached = external
+                || powerState == "AC Power"
+                || state == "Charging"
+                || chargingFlag
+
             return Snapshot(percent: percent,
-                            charging: charging || state == "Charging",
+                            charging: chargingFlag || state == "Charging",
                             full: state == "Full" || percent >= 100,
-                            maxCapacity: max)
+                            externalPower: attached,
+                            maxCapacity: max,
+                            raw: description)
         }
         return nil
     }

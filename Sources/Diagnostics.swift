@@ -68,6 +68,24 @@ enum Diagnostics {
             ok: !readablePowerlog.isEmpty
         ))
 
+        // The flag this app depends on. Shown raw, because on a replaced battery the
+        // documented keys are not necessarily the ones present, or they are present
+        // and wrong.
+        if let snapshot = PowerSources()?.read() {
+            let keys = ["Is Charging", "ExternalConnected", "State", "Power Source State",
+                        "Battery Status", "Current Capacity", "Max Capacity"]
+            let shown = keys.compactMap { key -> String? in
+                guard let value = snapshot.raw[key] else { return nil }
+                if let flag = value as? Bool { return "\(key)=\(flag ? 1 : 0)" }
+                return "\(key)=\(value)"
+            }
+            probes.append(Probe(
+                title: "电源上报原始值",
+                value: shown.isEmpty ? "无" : shown.joined(separator: "  "),
+                ok: snapshot.charging || snapshot.externalPower
+            ))
+        }
+
         return probes
     }
 
