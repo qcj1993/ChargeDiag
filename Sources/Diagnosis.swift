@@ -107,9 +107,11 @@ final class Diagnosis: ObservableObject {
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
         BackgroundSampler.shared.schedule()
-        // Hold the process open before the screen can sleep on us.
+        // Hold the process open before the screen can sleep on us. The scene hook
+        // went in at launch; the audio session starts and stops with the recording.
         BackgroundKeeper.shared.start()
         backgroundAudio = BackgroundKeeper.shared.audioRunning
+        sceneHookInstalled = SceneKeeper.shared.installed
         tick()
 
         timer?.invalidate()
@@ -176,6 +178,12 @@ final class Diagnosis: ObservableObject {
     /// recording in an hour" are different promises.
     @Published var backgroundAudio = false
 
+    /// Whether the scene hook installed, and how many background transitions it has
+    /// swallowed. The count is the honest half: installed but zero blocked proves
+    /// only that the method was found, not that the system ever asked to suspend us.
+    @Published var sceneHookInstalled = false
+    @Published var blockedTransitions = 0
+
     var keepScreenOn: Bool {
         get { BackgroundKeeper.shared.keepScreenOn }
         set {
@@ -195,6 +203,7 @@ final class Diagnosis: ObservableObject {
     private func tick() {
         guard running, let startedAt else { return }
         elapsed = Date().timeIntervalSince(startedAt)
+        blockedTransitions = SceneKeeper.shared.blocked
         sample()
     }
 

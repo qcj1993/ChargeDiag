@@ -30,11 +30,7 @@ struct ContentView: View {
                         noteCard(error, tint: Color(red: 0.95, green: 0.34, blue: 0.30))
                     }
                     if d.running {
-                        noteCard(d.backgroundAudio
-                                 ? "后台保活已启动，锁屏后仍会每秒记录，整晚的数据是连续的。"
-                                 : "后台保活没能启动，锁屏后系统会冻结这个 App，只能在偶尔唤醒时补采。",
-                                 tint: d.backgroundAudio ? Color(red: 0.20, green: 0.78, blue: 0.45)
-                                                         : Color(red: 0.98, green: 0.68, blue: 0.19))
+                        noteCard(keepingNote, tint: keepingTint)
                     }
                     sessionsSection
                 }
@@ -126,6 +122,32 @@ struct ContentView: View {
         .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
+    /// A hook that installed proves only that the method exists. The count is the
+    /// half that matters: it only rises when the system actually asked to suspend us
+    /// and was refused.
+    private var sceneText: String {
+        guard d.sceneHookInstalled else { return "不可用" }
+        if d.blockedTransitions > 0 { return "已拦下 \(d.blockedTransitions) 次" }
+        return d.running ? "已安装，尚未触发" : "已安装"
+    }
+
+    private var keepingNote: String {
+        if d.blockedTransitions > 0 {
+            return "系统已经 \(d.blockedTransitions) 次想把 App 挂起，都被拦下了，锁屏后仍会持续记录。"
+        }
+        if d.backgroundAudio {
+            return "音频会话已保活，锁屏后仍会每秒记录，整晚的数据是连续的。"
+        }
+        return "两条保活通道都没生效，锁屏后系统会冻结这个 App，只能在偶尔唤醒时补采。"
+    }
+
+    private var keepingTint: Color {
+        if d.blockedTransitions > 0 || d.backgroundAudio {
+            return Color(red: 0.20, green: 0.78, blue: 0.45)
+        }
+        return Color(red: 0.98, green: 0.68, blue: 0.19)
+    }
+
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -171,6 +193,8 @@ struct ContentView: View {
             row("充电状态", d.charging ? "充电中" : "未充电")
             divider
             row("后台保活", d.backgroundAudio ? "静音音频运行中" : (d.running ? "未生效" : "待启动"))
+            divider
+            row("挂起拦截", sceneText)
             divider
             row("已记录", "\(d.rows) 条 · \(timeText)")
             divider

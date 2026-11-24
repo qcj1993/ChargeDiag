@@ -136,6 +136,8 @@ final class ChargeDiagDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         BackgroundSampler.shared.register()
+        // Ahead of the first scene, so no background transition is missed.
+        SceneKeeper.shared.install()
         return true
     }
 }
