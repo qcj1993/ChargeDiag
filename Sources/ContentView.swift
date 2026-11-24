@@ -19,6 +19,7 @@ struct ContentView: View {
                     chartCard
                     detailRows
                     actionButton
+                    keeperCard
                     if let verdict = d.verdict {
                         verdictCard(verdict)
                     }
@@ -29,8 +30,11 @@ struct ContentView: View {
                         noteCard(error, tint: Color(red: 0.95, green: 0.34, blue: 0.30))
                     }
                     if d.running {
-                        noteCard("息屏后系统会冻结这个 App，只能在偶尔唤醒时补采。为了保证数据连续，充满前尽量让它停在屏幕上。",
-                                 tint: Color(red: 0.35, green: 0.72, blue: 1.0))
+                        noteCard(d.backgroundAudio
+                                 ? "后台保活已启动，锁屏后仍会每秒记录，整晚的数据是连续的。"
+                                 : "后台保活没能启动，锁屏后系统会冻结这个 App，只能在偶尔唤醒时补采。",
+                                 tint: d.backgroundAudio ? Color(red: 0.20, green: 0.78, blue: 0.45)
+                                                         : Color(red: 0.98, green: 0.68, blue: 0.19))
                     }
                     sessionsSection
                 }
@@ -166,6 +170,8 @@ struct ContentView: View {
             divider
             row("充电状态", d.charging ? "充电中" : "未充电")
             divider
+            row("后台保活", d.backgroundAudio ? "静音音频运行中" : (d.running ? "未生效" : "待启动"))
+            divider
             row("已记录", "\(d.rows) 条 · \(timeText)")
             divider
             row("容量假设", d.packWhText)
@@ -211,6 +217,30 @@ struct ContentView: View {
                 .background(Color.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    private func verdictCard(_ verdict: Verdict) -> some View {
+    private var keeperCard: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("保持屏幕常亮")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+                Text("只在后台保活失效时才需要打开，长时间亮屏有残影风险")
+                    .font(.system(size: 11))
+                    .foregroundColor(dim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(
+                get: { d.keepScreenOn },
+                set: { d.keepScreenOn = $0 }
+            ))
+            .labelsHidden()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func verdictCard(_ verdict: Verdict) -> some View {

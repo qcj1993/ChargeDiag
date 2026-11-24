@@ -107,6 +107,9 @@ final class Diagnosis: ObservableObject {
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
         BackgroundSampler.shared.schedule()
+        // Hold the process open before the screen can sleep on us.
+        BackgroundKeeper.shared.start()
+        backgroundAudio = BackgroundKeeper.shared.audioRunning
         tick()
 
         timer?.invalidate()
@@ -122,6 +125,8 @@ final class Diagnosis: ObservableObject {
         timer = nil
         ChargeLog.shared.close(packWh: packWh)
         BackgroundSampler.shared.cancel()
+        BackgroundKeeper.shared.stop()
+        backgroundAudio = false
         sessions = ChargeLog.shared.summaries()
         if let latest = sessions.first {
             verdict = Self.verdict(for: latest)
@@ -144,6 +149,8 @@ final class Diagnosis: ObservableObject {
     /// one that stopped and take a reading: its elapsed time spans the whole gap,
     /// which is exactly what makes an overnight charge readable afterwards.
     func sceneDidBecomeActive() {
+        BackgroundKeeper.shared.verify()
+        backgroundAudio = BackgroundKeeper.shared.audioRunning
         guard running else {
             refreshSessions()
             return
@@ -162,6 +169,20 @@ final class Diagnosis: ObservableObject {
         guard running, ChargeLog.shared.isRecording else { return }
         sample()
         ChargeLog.shared.flush()
+    }
+
+    /// Whether the silent audio session is currently holding the process open.
+    /// Shown in the UI, because "the app is recording" and "the app will still be
+    /// recording in an hour" are different promises.
+    @Published var backgroundAudio = false
+
+    var keepScreenOn: Bool {
+        get { BackgroundKeeper.shared.keepScreenOn }
+        set {
+            objectWillChange.send()
+            BackgroundKeeper.shared.keepScreenOn = newValue
+            backgroundAudio = BackgroundKeeper.shared.audioRunning
+        }
     }
 
     func refreshSessions() {
