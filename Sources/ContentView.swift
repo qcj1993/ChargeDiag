@@ -219,7 +219,6 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    private func verdictCard(_ verdict: Verdict) -> some View {
     private var keeperCard: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
