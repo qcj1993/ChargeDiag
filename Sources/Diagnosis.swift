@@ -33,6 +33,8 @@ final class Diagnosis: ObservableObject {
     @Published var batteryTemp: Double?
     @Published var percent: Int = 0
     @Published var charging = false
+    /// Whether a cable is attached, which is what the audio keeper follows.
+    @Published var attached = false
 
     // Session state.
     @Published var running = false
@@ -50,6 +52,8 @@ final class Diagnosis: ObservableObject {
     @Published var chartLabel = "本次记录"
     /// Set when the log was picked up from a previous run rather than started now.
     @Published var resumedFrom: Date?
+    /// Guards against several timers firing at once after a wake.
+    private var lastSampleAt: Date?
 
     private var sensors: PowerSensors?
     private var powerSources: PowerSources?
@@ -208,11 +212,11 @@ final class Diagnosis: ObservableObject {
 
     /// Off by default, because holding an audio session silences whatever else the
     /// phone is playing. The scene hook covers the suspend case on its own.
-    var useAudio: Bool {
-        get { BackgroundKeeper.shared.useAudio }
+    var autoOnPower: Bool {
+        get { BackgroundKeeper.shared.autoOnPower }
         set {
             objectWillChange.send()
-            BackgroundKeeper.shared.useAudio = newValue
+            BackgroundKeeper.shared.autoOnPower = newValue
             backgroundAudio = BackgroundKeeper.shared.audioRunning
         }
     }
@@ -245,6 +249,13 @@ final class Diagnosis: ObservableObject {
             resumedFrom = startedAt
         }
         guard let startedAt else { return }
+
+        // A wake from suspension can fire several timers at once, which wrote rows
+        // sharing a timestamp -- on the lock test, two rows at 338.5 s with different
+        // values. They add nothing a reader can use.
+        let now = Date()
+        if let last = lastSampleAt, now.timeIntervalSince(last) < 0.4 { return }
+        lastSampleAt = now
 
         let readings = sensors?.read() ?? []
         var vIn: Double?
@@ -284,6 +295,11 @@ final class Diagnosis: ObservableObject {
             let flowing = cellAmps > 0.05
             charging = snapshot.charging
                 || (snapshot.externalPower && flowing && percent < 100)
+            attached = snapshot.externalPower
+            // The only channel measured to survive a screen lock. Tied to power
+            // because that is when the log is worth the battery.
+            BackgroundKeeper.shared.sync(externalPower: snapshot.externalPower)
+            backgroundAudio = BackgroundKeeper.shared.audioRunning
         }
 
         let elapsedNow = Date().timeIntervalSince(startedAt)

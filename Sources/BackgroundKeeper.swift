@@ -28,27 +28,38 @@ final class BackgroundKeeper {
 
     private init() {}
 
-    /// Whether to run the silent audio stream at all.
+    /// Whether to hold the audio session open while the phone has a cable attached.
     ///
-    /// Off by default. An audio session claiming `.playback` takes the audio route
-    /// for itself, so with it running the phone cannot play music or a video
-    /// without this app being the thing holding the channel -- and the media keys
-    /// start pointing at a stream nobody can hear. That is a bad trade now that the
-    /// scene hook keeps the process alive anyway: the hook is free and invisible,
-    /// the session is neither.
+    /// On by default, because it is the only channel measured to survive a screen
+    /// lock. The scene hook cannot help there: a lock suspends through the system's
+    /// own assertion ledger, not through the app's self-reported scene state, so a
+    /// hook on that path never sees the transition. A five minute lock produced a
+    /// five minute hole with the hook installed and no hole reported by it.
     ///
-    /// It stays available because the hook is undocumented and could stop working
-    /// on some iOS build, and because a caller may want a second channel. It is a
-    /// fallback to switch on deliberately, not something to impose.
-    var useAudio: Bool {
-        get { UserDefaults.standard.bool(forKey: "useAudio") }
+    /// Tied to external power rather than left always-on because the cost is real:
+    /// roughly one to two percent of battery per hour, for a record nobody is reading
+    /// while the phone is in a pocket. Charging is when the log matters and when the
+    /// cost is already paid.
+    var autoOnPower: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            if defaults.object(forKey: "autoOnPower") == nil { return true }
+            return defaults.bool(forKey: "autoOnPower")
+        }
         set {
-            UserDefaults.standard.set(newValue, forKey: "useAudio")
-            if newValue {
-                startAudio()
-            } else {
-                tearDownAudio()
-            }
+            UserDefaults.standard.set(newValue, forKey: "autoOnPower")
+            if !newValue { tearDownAudio() }
+        }
+    }
+
+    /// Starts or stops the session to match whether the phone is on power. Called
+    /// once per sample, so plugging in mid-recording takes effect within a second.
+    func sync(externalPower: Bool) {
+        guard autoOnPower else { return }
+        if externalPower {
+            if !audioRunning { startAudio() }
+        } else if audioRunning {
+            tearDownAudio()
         }
     }
 
@@ -63,7 +74,6 @@ final class BackgroundKeeper {
     }
 
     func start() {
-        if useAudio { startAudio() }
         applyScreen()
     }
 
@@ -78,7 +88,7 @@ final class BackgroundKeeper {
     /// true, and a dead engine is worse than none: the app looks protected and is
     /// not.
     func verify() {
-        guard useAudio else {
+        guard autoOnPower else {
             applyScreen()
             return
         }

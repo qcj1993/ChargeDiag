@@ -151,28 +151,33 @@ struct ContentView: View {
     }
 
     private var audioText: String {
-        guard d.useAudio else { return "关" }
-        return d.backgroundAudio ? "运行中" : "已开启，未启动"
+        guard d.autoOnPower else { return "关（手动）" }
+        if d.backgroundAudio { return "插电保活中" }
+        return d.attached ? "插电，启动中" : "未插电，待机"
     }
 
     private var keepingNote: String {
-        if d.blockedTransitions > 0 {
-            return "系统已经 \(d.blockedTransitions) 次想把 App 挂起，都被拦下了，锁屏后仍会持续记录。"
-        }
-        if d.sceneHookInstalled {
-            return "挂起拦截已装好，但还没拦下过任何一次。锁屏几分钟再回来看这里的数字。"
-        }
         if d.backgroundAudio {
-            return "挂起拦截不可用，现在是音频会话在保活，整晚能连续记录，但会占用音频通道。"
+            return "插电中，音频保活已启动。锁屏后仍会每秒记录，一整晚的数据是连续的。"
         }
-        return "两条保活通道都没生效，锁屏后系统会冻结这个 App，只能在偶尔唤醒时补采。"
+        if d.blockedTransitions > 0 {
+            return "系统 \(d.blockedTransitions) 次想挂起都被拦下了，锁屏后仍会持续记录。"
+        }
+        if !d.autoOnPower {
+            return "保活已手动关闭。锁屏后系统会冻结这个 App，数据会断开。"
+        }
+        if !d.attached {
+            return "没插电，保活待机。插上充电器后会自动开始，锁屏也能持续记录。"
+        }
+        return "插上电了，正在启动保活。"
     }
 
     private var keepingTint: Color {
-        if d.blockedTransitions > 0 { return Color(red: 0.20, green: 0.78, blue: 0.45) }
-        if d.sceneHookInstalled { return Color(red: 0.35, green: 0.72, blue: 1.0) }
-        if d.backgroundAudio { return Color(red: 0.98, green: 0.68, blue: 0.19) }
-        return Color(red: 0.98, green: 0.68, blue: 0.19)
+        if d.backgroundAudio || d.blockedTransitions > 0 {
+            return Color(red: 0.20, green: 0.78, blue: 0.45)
+        }
+        if !d.autoOnPower { return Color(red: 0.98, green: 0.68, blue: 0.19) }
+        return Color(red: 0.35, green: 0.72, blue: 1.0)
     }
 
     private var chartCard: some View {
@@ -327,9 +332,9 @@ struct ContentView: View {
             )
             divider
             keeperRow(
-                "静音音频保活",
-                "会和正在播放的音乐、视频抢音频通道，只在挂起拦截不可用时才需要",
-                isOn: Binding(get: { d.useAudio }, set: { d.useAudio = $0 })
+                "插电时自动保活",
+                "锁屏后只有这条路能继续记录，插电才启用，约 1-2%/小时",
+                isOn: Binding(get: { d.autoOnPower }, set: { d.autoOnPower = $0 })
             )
         }
         .background(card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
