@@ -104,7 +104,8 @@ final class SceneKeeper {
 
         // v32@0:8@16@24@32@40 -- void return, self, _cmd, then four objects. Anything
         // else means the method changed shape and the arguments below would be wrong.
-        let encoding = String(cString: method_getTypeEncoding(method))
+        guard let typeEncoding = method_getTypeEncoding(method) else { return false }
+        let encoding = String(cString: typeEncoding)
         let objects = encoding.filter { $0 == "@" }.count
         guard encoding.hasPrefix("v"), objects >= 5 else {
             NSLog("[ChargeDiag] unexpected scene method encoding: \(encoding)")
