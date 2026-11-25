@@ -111,11 +111,10 @@ final class Diagnosis: ObservableObject {
         sensors?.rescan()
         logURL = ChargeLog.shared.begin(packWh: packWh)
         BackgroundSampler.shared.schedule()
-        // The scene hook went in at launch and is what keeps the process alive. The
-        // audio session only starts if the user asked for it.
+        // The session starts on plugging in rather than here, so a recording begun on
+        // battery costs nothing until a cable appears.
         BackgroundKeeper.shared.start()
         backgroundAudio = BackgroundKeeper.shared.audioRunning
-        sceneHookInstalled = SceneKeeper.shared.installed
         tick()
 
         timer?.invalidate()
@@ -157,7 +156,6 @@ final class Diagnosis: ObservableObject {
     func sceneDidBecomeActive() {
         BackgroundKeeper.shared.verify()
         backgroundAudio = BackgroundKeeper.shared.audioRunning
-        refreshDiagnostics()
         guard running else {
             refreshSessions()
             return
@@ -178,28 +176,10 @@ final class Diagnosis: ObservableObject {
         ChargeLog.shared.flush()
     }
 
-    /// Re-reads which keep-alive channels are live. The hook retries for several
-    /// seconds after launch, so this is called again once things have settled.
-    func refreshDiagnostics() {
-        sceneHookInstalled = SceneKeeper.shared.installed
-        sceneHookReason = SceneKeeper.shared.failureReason
-        probes = Diagnostics.run()
-    }
-
     /// Whether the silent audio session is currently holding the process open.
     /// Shown in the UI, because "the app is recording" and "the app will still be
     /// recording in an hour" are different promises.
     @Published var backgroundAudio = false
-
-    /// Whether the scene hook installed, and how many background transitions it has
-    /// swallowed. The count is the honest half: installed but zero blocked proves
-    /// only that the method was found, not that the system ever asked to suspend us.
-    @Published var sceneHookInstalled = false
-    @Published var blockedTransitions = 0
-    /// Why the hook did not install, phrased for the UI. Nil when it worked.
-    @Published var sceneHookReason: String?
-    /// Read-only findings about which keep-alive channels this device offers.
-    @Published var probes: [Probe] = []
 
     var keepScreenOn: Bool {
         get { BackgroundKeeper.shared.keepScreenOn }
@@ -210,8 +190,9 @@ final class Diagnosis: ObservableObject {
         }
     }
 
-    /// Off by default, because holding an audio session silences whatever else the
-    /// phone is playing. The scene hook covers the suspend case on its own.
+    /// Whether the silent session follows the cable. On by default: it is the only
+    /// channel measured to survive a screen lock, and it costs nothing while the
+    /// phone is off power because there is no session to keep.
     var autoOnPower: Bool {
         get { BackgroundKeeper.shared.autoOnPower }
         set {
@@ -231,11 +212,6 @@ final class Diagnosis: ObservableObject {
     private func tick() {
         guard running, let startedAt else { return }
         elapsed = Date().timeIntervalSince(startedAt)
-        blockedTransitions = SceneKeeper.shared.blocked
-        if sceneHookInstalled != SceneKeeper.shared.installed {
-            sceneHookInstalled = SceneKeeper.shared.installed
-            sceneHookReason = SceneKeeper.shared.failureReason
-        }
         sample()
     }
 
